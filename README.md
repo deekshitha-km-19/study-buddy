@@ -1,1 +1,1 @@
-# study-buddy
+# smart coding agent
