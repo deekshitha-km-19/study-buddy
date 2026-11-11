@@ -478,7 +478,7 @@ if st.button("▶️ Run Python Code", use_container_width=True):
 st.divider()
 
 st.markdown(
-    "<h3 style='text-align:center;'>Developed by DEEKSHITHA KM</h3>",
+    "<h3 style='text-align:center;'>Developed by ABDH</h3>",
     unsafe_allow_html=True
 )
 
