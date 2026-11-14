@@ -5,99 +5,195 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import errors
 
+# Load environment variables
 load_dotenv()
 
+# Gemini configuration
 API_KEY = os.getenv("GEMINI_API_KEY")
+MODEL = "gemini-3.8-flash"
 
-if not API_KEY:
-    raise ValueError("API key missing. Check your .env file.")
+# Create client only when needed
+_client = None
 
-client = genai.Client(api_key=API_KEY)
 
-MODEL = "gemini-3.5-flash-lite"
+def get_client():
+    global _client
 
+    if not API_KEY:
+        raise ValueError(
+            "Gemini API key missing. Please check your .env file."
+        )
+
+    if _client is None:
+        _client = genai.Client(api_key=API_KEY)
+
+    return _client
+
+
+def generate_response(prompt, retries=3):
+    """Common Gemini API function with error handling."""
+
+    try:
+        client = get_client()
+
+        for attempt in range(retries):
+            try:
+                response = client.models.generate_content(
+                    model=MODEL,
+                    contents=prompt
+                )
+
+                if response.text:
+                    return response.text
+
+                return "Gemini returned an empty response."
+
+            except errors.ServerError:
+                if attempt == retries - 1:
+                    return "Gemini server is busy. Please try again later."
+
+                time.sleep(2 * (attempt + 1))
+
+    except ValueError as error:
+        return str(error)
+
+    except Exception as error:
+        return f"Gemini API error: {error}"
+
+
+# ==========================================
+# 1. AI CODE GENERATION
+# ==========================================
 
 def generate_code(task):
 
+    if not task or not task.strip():
+        return "Please enter a coding task."
+
     prompt = f"""
-    You are an expert Python coding assistant.
+You are an expert Python coding assistant.
 
-    Task: {task}
+User Task:
+{task}
 
-    Provide:
-    1. Correct Python code.
-    2. Simple explanation.
-    3. Sample output.
-    4. Efficient solution.
-    """
+Provide the following:
 
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(
-                model=MODEL,
-                contents=prompt
-            )
-            return response.text
+1. Correct and complete Python code.
+2. Simple explanation.
+3. Sample output.
+4. Efficient solution.
+5. Important edge cases.
 
-        except errors.ServerError:
-            if attempt == 2:
-                return "Gemini server is busy. Please try again later."
+Rules:
+- Write beginner-friendly Python code.
+- Use proper indentation.
+- Include comments where necessary.
+- Make sure the code is logically correct.
+"""
 
-            time.sleep(5 * (attempt + 1))
+    return generate_response(prompt)
+
+
+# ==========================================
+# 2. AI CODE DEBUGGER
+# ==========================================
 
 def debug_code(code):
+
+    if not code or not code.strip():
+        return "Please provide Python code to debug."
+
     prompt = f"""
 You are an expert Python debugging assistant.
 
-1. Find errors in the code.
-2. Explain each error simply.
-3. Provide corrected Python code.
-4. Explain the correction.
+Analyze the following Python code.
 
-Code:
+Provide:
+
+1. Errors found in the code.
+2. Explanation of each error.
+3. Corrected complete Python code.
+4. Explanation of the corrections.
+5. Suggestions to prevent similar errors.
+
+If the code has no errors, explain that clearly.
+
+Python Code:
+```python
 {code}
+```
 """
 
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents=prompt
-    )
+    return generate_response(prompt)
 
-    return response.text
 
+# ==========================================
+# 3. AI CODE EXPLANATION
+# ==========================================
 
 def explain_code(code):
-    prompt = f"""
-You are an expert Python teacher.
 
-Explain this code to a beginner.
+    if not code or not code.strip():
+        return "Please provide Python code to explain."
+
+    prompt = f"""
+You are an expert Python programming teacher.
+
+Explain this Python code to a beginner.
+
+Provide:
 
 1. What does the program do?
 2. Explain each line.
 3. Explain the Python concepts used.
 4. Give a simple dry run.
-5. Explain the output.
+5. Explain the expected output.
+6. Give one practical example.
+
+Use simple English and beginner-friendly explanations.
 
 Python Code:
+```python
 {code}
+```
 """
 
-    try:
-        # Primary model
-        response = client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=prompt
-        )
+    return generate_response(prompt)
 
-        return response.text
 
-    except Exception as error:
-        print("Primary model failed:", error)
+# ==========================================
+# 4. AI CODE REVIEW
+# ==========================================
 
-        # Backup model
-        response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
-            contents=prompt
-        )
+def review_code(code):
 
-        return response.text
+    if not code or not code.strip():
+        return "Please provide code for review."
+
+    prompt = f"""
+You are a professional Python code reviewer.
+
+Review the following code.
+
+Check:
+
+1. Code quality.
+2. Bugs and logical errors.
+3. Performance.
+4. Security concerns.
+5. Readability.
+6. Best practices.
+
+Give:
+- Overall review.
+- Issues found.
+- Improvement suggestions.
+- Improved code if necessary.
+
+Python Code:
+```python
+{code}
+```
+"""
+
+    return generate_response(prompt)

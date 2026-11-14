@@ -1,3 +1,4 @@
+
 import json
 import subprocess
 import sys
@@ -5,7 +6,20 @@ import tempfile
 import os
 
 
+TIMEOUT_SECONDS = 5
+
+
 def execute_python_code(code):
+    """Execute Python code and return its output."""
+
+    if not isinstance(code, str) or not code.strip():
+        return {
+            "success": False,
+            "output": "",
+            "error": "Please provide valid Python code.",
+            "return_code": None
+        }
+
     temp_file = None
 
     try:
@@ -22,7 +36,7 @@ def execute_python_code(code):
             [sys.executable, temp_file],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=TIMEOUT_SECONDS
         )
 
         return {
@@ -50,65 +64,104 @@ def execute_python_code(code):
 
     finally:
         if temp_file and os.path.exists(temp_file):
-            os.remove(temp_file)
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
+
 
 def run_function_tests(code, function_name, test_cases):
-    import json
-    import subprocess
-    import sys
-    import tempfile
-    import os
+    """Execute function tests and generate a pass/fail report."""
 
     temp_file = None
 
     try:
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError("Python code cannot be empty.")
+
+        if not isinstance(function_name, str):
+            raise ValueError("Function name must be a string.")
+
         if not function_name.isidentifier():
             raise ValueError("Invalid function name.")
 
         if not isinstance(test_cases, list) or not test_cases:
             raise ValueError("No test cases provided.")
 
-        # Prepare the automatic test runner
-        runner_code = f"""
+        for index, case in enumerate(test_cases, start=1):
+
+            if not isinstance(case, dict):
+                raise ValueError(
+                    f"Test case {index} must be a dictionary."
+                )
+
+            if not isinstance(case.get("args"), list):
+                raise ValueError(
+                    f"Test case {index} must contain an args list."
+                )
+
+            if "expected" not in case:
+                raise ValueError(
+                    f"Test case {index} is missing expected output."
+                )
+
+        # Build isolated test runner process.
+        runner_code = f'''
 import json
+import traceback
 
 namespace = {{}}
 
-exec({code!r}, namespace)
+try:
+    exec({code!r}, namespace)
 
-function = namespace.get({function_name!r})
+    function = namespace.get({function_name!r})
 
-if not callable(function):
-    raise ValueError("Function not found: {function_name}")
+    if not callable(function):
+        raise ValueError(
+            "Function not found: {function_name}"
+        )
 
-test_cases = {test_cases!r}
+    test_cases = {test_cases!r}
 
-for index, case in enumerate(test_cases, 1):
-    try:
-        actual = function(*case["args"])
-        expected = case["expected"]
+    for index, case in enumerate(test_cases, 1):
 
-        passed = actual == expected
+        try:
+            actual = function(*case["args"])
+            expected = case["expected"]
 
-        result = {{
-            "test": index,
-            "args": case["args"],
-            "expected": expected,
-            "actual": actual,
-            "passed": passed
-        }}
+            passed = actual == expected
 
-    except Exception as error:
-        result = {{
-            "test": index,
-            "args": case.get("args", []),
-            "expected": case.get("expected"),
-            "actual": str(error),
-            "passed": False
-        }}
+            result = {{
+                "test": index,
+                "args": case["args"],
+                "expected": expected,
+                "actual": actual,
+                "passed": passed
+            }}
 
-    print("SMART_TEST_RESULT:" + json.dumps(result))
-"""
+        except Exception as error:
+
+            result = {{
+                "test": index,
+                "args": case.get("args", []),
+                "expected": case.get("expected"),
+                "actual": str(error),
+                "passed": False
+            }}
+
+        print(
+            "SMART_TEST_RESULT:"
+            + json.dumps(result, default=str)
+        )
+
+except Exception as error:
+    print(
+        "SMART_TEST_ERROR:"
+        + str(error)
+    )
+    raise
+'''
 
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -124,36 +177,71 @@ for index, case in enumerate(test_cases, 1):
             [sys.executable, temp_file],
             capture_output=True,
             text=True,
-            timeout=5
+            timeout=TIMEOUT_SECONDS
         )
 
         results = []
+        runner_error = ""
 
         for line in process.stdout.splitlines():
+
             if line.startswith("SMART_TEST_RESULT:"):
-                result_json = line.replace(
-                    "SMART_TEST_RESULT:", "", 1
-                )
+
+                result_json = line.split(
+                    "SMART_TEST_RESULT:", 1
+                )[1]
+
                 results.append(json.loads(result_json))
 
+            elif line.startswith("SMART_TEST_ERROR:"):
+
+                runner_error = line.split(
+                    "SMART_TEST_ERROR:", 1
+                )[1]
+
         if process.returncode != 0:
+
             return {
                 "success": False,
                 "results": results,
-                "error": process.stderr or "Test execution failed."
+                "error": (
+                    runner_error
+                    or process.stderr
+                    or "Test runner failed."
+                )
             }
 
+        if len(results) != len(test_cases):
+
+            return {
+                "success": False,
+                "results": results,
+                "error": (
+                    runner_error
+                    or "Some test results were missing."
+                )
+            }
+
+        passed_count = sum(
+            1 for result in results
+            if result.get("passed")
+        )
+
+        all_passed = passed_count == len(test_cases)
+
         return {
-            "success": True,
+            "success": all_passed,
             "results": results,
-            "error": ""
+            "error": "" if all_passed else (
+                f"{len(test_cases) - passed_count} test(s) failed."
+            )
         }
 
     except subprocess.TimeoutExpired:
         return {
             "success": False,
             "results": [],
-            "error": "Test execution timed out."
+            "error": "Test execution timed out after 5 seconds."
         }
 
     except Exception as error:
@@ -165,4 +253,7 @@ for index, case in enumerate(test_cases, 1):
 
     finally:
         if temp_file and os.path.exists(temp_file):
-            os.remove(temp_file)
+            try:
+                os.remove(temp_file)
+            except OSError:
+                pass
